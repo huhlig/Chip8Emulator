@@ -5,8 +5,8 @@ use std::io;
 use std::io::prelude::*;
 use std::fs::File;
 use std::io::BufReader;
+use rand::prelude::*;
 
-const DEBUG: bool = true;
 
 struct Chip8
 {
@@ -116,14 +116,14 @@ impl Chip8
 			},
 			0x3000 => //0x3XNN: Skips the next instruction if V[X] equals NN
 			{
-				if(self.v[(self.opcode & 0x0F00 >> 8) as usize] == (self.opcode & 0xFF) as u8) //probably broken
+				if(self.v[((self.opcode & 0x0F00) >> 8) as usize] == (self.opcode & 0xFF) as u8) //probably broken
 				{
-					if DEBUG{println!("{0:x} | Skipped an Instruction because v[{1}] ({3}) == {2}",self.opcode,(self.opcode & 0x0F00 >> 8),(self.opcode & 0x00FF) as u8,self.v[(self.opcode & 0x0F00 >> 8) as usize])};
+					if DEBUG{println!("{0:x} | Skipped an Instruction because v[{1}] ({3}) == {2}",self.opcode,((self.opcode & 0x0F00) >> 8),(self.opcode & 0x00FF) as u8,self.v[((self.opcode & 0x0F00) >> 8) as usize])};
 					self.pc += 4;
 				}
 				else
 				{
-					if DEBUG{println!("{0:x} | Didn't skip an Instruction because v[{1}] {3} != {2}",self.opcode,(self.opcode & 0x0F00 >> 8),(self.opcode & 0x00FF) as u8,self.v[(self.opcode & 0x0F00 >> 8) as usize])};
+					if DEBUG{println!("{0:x} | Didn't skip an Instruction because v[{1}] {3} != {2}",self.opcode,((self.opcode & 0x0F00) >> 8),(self.opcode & 0x00FF) as u8,self.v[((self.opcode & 0x0F00) >> 8) as usize])};
 					self.pc += 2;
 				}
 			},
@@ -165,7 +165,16 @@ impl Chip8
 			{
 				let i: usize = ((self.opcode & 0x0F00) >> 8) as usize;
 				let v: u8 = (self.opcode & 0xFF) as u8;
-				self.v[i] += v;
+
+				if(((self.v[i] as u16) + (v as u16)) <= 255)
+				{
+					self.v[i] += v;
+				}
+				else
+				{
+					self.v[i] = 0;
+				}
+				
 				if DEBUG{println!("{0:x} | Added {2} to V[{1}] (V[{1}] is now equal to {3})", self.opcode,i, v,self.v[i])};
 				self.pc += 2;
 			},
@@ -238,6 +247,16 @@ impl Chip8
 				if DEBUG{println!("{0:x} | Set i register to {1}",self.opcode,self.i);}
 				self.pc += 2;
 			},
+			0xC000 => //CXNN = Sets V[x] to a random number AND NN
+			{
+				let i: u8 = ((self.opcode & 0x0F00) >> 8)as u8;
+				let n: u8 = (self.opcode & 0x00FF) as u8;
+				let mut rng = rand::thread_rng(); 
+				let r: u8 = rng.gen();
+				self.v[i as usize] = (n & r);
+				if DEBUG{println!("{0:x} Set V[{1}] to ({2} & {3})",self.opcode,i,n,r);}
+				self.pc += 2;
+			},
 			0xD000 =>
 			{
 				let x: u16 = self.v[((self.opcode & 0x0F00) >> 8) as usize] as u16;
@@ -264,7 +283,79 @@ impl Chip8
 				if DEBUG{println!("{0:x} | Drew a sprite",self.opcode)};
 				self.draw_flag = true;
 				self.pc += 2;
-			}			
+			},
+			0xE000 =>
+			{
+				match (self.opcode & 0x00FF)
+				{
+					0x009E =>
+					{
+						if(self.key[self.v[((self.opcode & 0x0F00) >> 8) as usize] as usize] != 0)
+						{
+							self.pc += 4;
+						}
+						else
+						{
+							self.pc += 2;
+						}
+					},
+					0x00A1 =>
+					{
+						if(self.key[self.v[((self.opcode & 0x0F00) >> 8) as usize] as usize] == 0)
+						{
+							self.pc += 4;
+						}
+						else
+						{
+							self.pc += 2;
+						}
+					},
+					_ => 
+					{
+						panic!("Unknown instruction: {:0x}",self.opcode);
+					}
+				}
+			},
+			0xF000 =>
+			{
+				match (self.opcode & 0x00FF)
+				{
+					0x0007 =>
+					{
+						let i: u8 = ((self.opcode & 0x0F00) >> 8) as u8;
+						self.v[i as usize] = self.delay_timer;
+						if DEBUG{println!("{0:x} | Set v[{1}] to {2}",self.opcode,i,self.delay_timer)};
+						self.pc += 2;
+					},
+					0x001E => //Probably broken
+					{
+						if(((self.i as u16) + (self.v[((self.opcode & 0xF00) >> 8) as usize] as u16) as u16) > 0xFFF)
+						{
+							self.v[0xF] = 1;
+							if DEBUG{println!("{0:x} | Set V[15] to 1",self.opcode)};
+						}
+						else
+						{
+							self.v[0xF] = 0;
+							if DEBUG{println!("{0:x} | Set V[15] to 0",self.opcode)};
+						}
+						self.i += self.v[(((self.opcode & 0x0F00) >> 8) as usize)] as u16;
+						self.pc += 2;
+					},
+					0x0015 =>
+					{
+						let i: u8 = ((self.opcode & 0x0F00) >> 8) as u8;
+						let v: u8 = self.v[i as usize];
+						self.delay_timer = v;
+						if DEBUG{println!("{0:x} | Set delay timer to V[{1}] ({2})",self.opcode,i,v)};
+						self.pc += 2;
+					},
+					_ => 
+					{
+						panic!("Unknown instruction: {:0x}",self.opcode);
+					}
+				}
+			},			
 			_ => 
 			{
 				panic!("Unknown instruction: {:0x}",self.opcode);
@@ -303,7 +394,7 @@ impl Chip8
 					}
 					else 
 					{
-						print!(" ");
+						print!("█");
 					}				
 				}
 				print!("\n");
@@ -313,6 +404,8 @@ impl Chip8
 		}
 	}
 }
+
+const DEBUG: bool = true;
 
 fn main()
 {
@@ -326,7 +419,7 @@ fn main()
 		chip8.emulate_cycle();
 		//print!("{}[2J", 27 as char);
 		//chip8.debug_render();
-		//thread::sleep_ms(1000/60);
+		thread::sleep_ms(1000/30);
 	}
 
 }
